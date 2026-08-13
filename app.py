@@ -19,7 +19,7 @@ classNames = [
     "skis", "snowboard", "sports ball", "kite", "baseball bat", "baseball glove", "skateboard", "surfboard",
     "tennis racket", "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", "apple",
     "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair", "sofa",
-    "pottedplant", "bed", "diningtable", "toilet", "tvmonitor", "laptop", "mouse", "remote", "keyboard",
+    "pottedplant", "bed", "dining table", "toilet", "TV monitor", "laptop", "mouse", "remote", "keyboard",
     "cell phone", "microwave", "oven", "toaster", "sink", "refrigerator", "book", "clock", "vase",
     "scissors", "teddy bear", "hair drier", "toothbrush"
 ]
@@ -27,27 +27,30 @@ classNames = [
 def generate_frames():
     while True:
         success, image = cap.read()
-        if not success:
-            break
-
         results = model(image, conf=0.5, stream=True)
-
         for r in results:
-            for box in r.boxes:
-                x1, y1, x2, y2 = map(int, box.xyxy[0])
+            boxes = r.boxes
+            for box in boxes:
+                # Bounding box
+                x1, y1, x2, y2 = box.xyxy[0]
+                x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+
                 w, h = x2 - x1, y2 - y1
                 cvzone.cornerRect(image, (x1, y1, w, h))
 
-                conf = round(float(box.conf[0]), 2)
+                # Confidence
+                conf = math.ceil((box.conf[0] * 100)) / 100
+
+                # Class Name
                 cls = int(box.cls[0])
+                cvzone.putTextRect(image, f'{classNames[cls]} {conf}', (max(35, x1), max(35, y1)))
+        # --- YOUR YOLO LOGIC ENDS HERE ---
 
-                cvzone.putTextRect(
-                    image,
-                    f'{classNames[cls]} {conf}',
-                    (x1, y1 - 10)
-                )
-
+        # Encode the frame into JPEG format
         ret, buffer = cv2.imencode('.jpg', image)
+        key = cv2.waitKey(3)
+        if key & 0xFF == ord('k'):
+            break
         frame = buffer.tobytes()
 
         yield (b'--frame\r\n'
@@ -66,4 +69,4 @@ def video():
 
 
 if __name__ == "__main__":
-    app.run(host='0.0.0.0',debug=True)
+    app.run(debug=True)
