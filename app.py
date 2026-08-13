@@ -6,7 +6,7 @@ import math
 
 app = Flask(__name__)
 
-cap = cv2.VideoCapture(0)
+cap = cv2.VideoCapture(1)
 cap.set(3, 1280)
 cap.set(4, 480)
 
