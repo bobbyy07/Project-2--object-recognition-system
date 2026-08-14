@@ -1,73 +1,172 @@
-from flask import Flask, Response, render_template
+from flask import Flask, render_template, Response, request, jsonify
 from ultralytics import YOLO
 import cv2
-import cvzone
-import math
+import numpy as np
 import os
 
 app = Flask(__name__)
 
-cap = cv2.VideoCapture(0)
-cap.set(3, 1280)
-cap.set(4, 480)
+# ---------------------------------------------------
+# Load YOLO model
+# ---------------------------------------------------
 
-model = YOLO('yolo-weights/yolov8n.pt')
+MODEL_PATH = "yolov8n.onnx"
 
-classNames = [
-    "person", "bicycle", "car", "motorbike", "aeroplane", "bus", "train", "truck", "boat", "traffic light",
-    "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat", "dog", "horse", "sheep", "cow",
-    "elephant", "bear", "zebra", "giraffe", "backpack", "umbrella", "handbag", "tie", "suitcase", "frisbee",
-    "skis", "snowboard", "sports ball", "kite", "baseball bat", "baseball glove", "skateboard", "surfboard",
-    "tennis racket", "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", "apple",
-    "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair", "sofa",
-    "pottedplant", "bed", "dining table", "toilet", "TV monitor", "laptop", "mouse", "remote", "keyboard",
-    "cell phone", "microwave", "oven", "toaster", "sink", "refrigerator", "book", "clock", "vase",
-    "scissors", "teddy bear", "hair drier", "toothbrush"
-]
+if not os.path.exists(MODEL_PATH):
+    raise FileNotFoundError(
+        f"Model file '{MODEL_PATH}' was not found."
+    )
 
-def generate_frames():
-    while True:
-        success, image = cap.read()
-        results = model(image, conf=0.5, stream=True)
-        for r in results:
-            boxes = r.boxes
+model = YOLO(MODEL_PATH)
+
+print("YOLO model loaded successfully!")
+
+
+# ---------------------------------------------------
+# Home page
+# ---------------------------------------------------
+
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+
+# ---------------------------------------------------
+# Object detection
+# ---------------------------------------------------
+
+@app.route("/detect", methods=["POST"])
+def detect():
+
+    try:
+        # Check if image was received
+        if "image" not in request.files:
+            return jsonify({
+                "error": "No image received"
+            }), 400
+
+        file = request.files["image"]
+
+        # Read image bytes
+        image_bytes = file.read()
+
+        # Convert bytes to numpy array
+        np_array = np.frombuffer(image_bytes, np.uint8)
+
+        # Decode image
+        image = cv2.imdecode(np_array, cv2.IMREAD_COLOR)
+
+        if image is None:
+            return jsonify({
+                "error": "Could not decode image"
+            }), 400
+
+        # ---------------------------------------------------
+        # Run YOLO detection
+        # ---------------------------------------------------
+
+        results = model.predict(
+            source=image,
+            conf=0.5,
+            verbose=False
+        )
+
+        # ---------------------------------------------------
+        # Draw detections
+        # ---------------------------------------------------
+
+        for result in results:
+
+            boxes = result.boxes
+
             for box in boxes:
-                # Bounding box
-                x1, y1, x2, y2 = box.xyxy[0]
-                x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
 
-                w, h = x2 - x1, y2 - y1
-                cvzone.cornerRect(image, (x1, y1, w, h))
+                # Bounding box
+                x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
 
                 # Confidence
-                conf = math.ceil((box.conf[0] * 100)) / 100
+                confidence = float(box.conf[0])
 
-                # Class Name
-                cls = int(box.cls[0])
-                cvzone.putTextRect(image, f'{classNames[cls]} {conf}', (max(35, x1), max(35, y1)))
-        # --- YOUR YOLO LOGIC ENDS HERE ---
+                # Class ID
+                class_id = int(box.cls[0])
 
-        # Encode the frame into JPEG format
-        ret, buffer = cv2.imencode('.jpg', image)
-        key = cv2.waitKey(3)
-        if key & 0xFF == ord('k'):
-            break
-        frame = buffer.tobytes()
+                # Get class name
+                class_name = model.names[class_id]
 
-        yield (b'--frame\r\n'
-               b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+                # Label
+                label = f"{class_name} {confidence:.2f}"
+
+                # Draw rectangle
+                cv2.rectangle(
+                    image,
+                    (x1, y1),
+                    (x2, y2),
+                    (0, 255, 0),
+                    2
+                )
+
+                # Text background
+                (text_width, text_height), baseline = cv2.getTextSize(
+                    label,
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    2
+                )
+
+                cv2.rectangle(
+                    image,
+                    (x1, y1 - text_height - baseline - 5),
+                    (x1 + text_width, y1),
+                    (0, 255, 0),
+                    -1
+                )
+
+                # Label text
+                cv2.putText(
+                    image,
+                    label,
+                    (x1, y1 - 5),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (0, 0, 0),
+                    2
+                )
+
+        # ---------------------------------------------------
+        # Encode image as JPEG
+        # ---------------------------------------------------
+
+        success, buffer = cv2.imencode(".jpg", image)
+
+        if not success:
+            return jsonify({
+                "error": "Could not encode image"
+            }), 500
+
+        return Response(
+            buffer.tobytes(),
+            mimetype="image/jpeg"
+        )
+
+    except Exception as e:
+
+        print("Detection error:", e)
+
+        return jsonify({
+            "error": str(e)
+        }), 500
 
 
-@app.route('/')
-def index():
-    return render_template('index.html')
-
-
-@app.route('/video')
-def video():
-    return Response(generate_frames(),
-                    mimetype='multipart/x-mixed-replace; boundary=frame')
-
+# ---------------------------------------------------
+# Run locally
+# ---------------------------------------------------
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0",port=int(os.environ.get("PORT",10000)))
+
+    port = int(os.environ.get("PORT", 10000))
+
+    app.run(
+        host="0.0.0.0",
+        port=port,
+        debug=False
+    )
